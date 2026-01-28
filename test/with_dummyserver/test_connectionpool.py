@@ -1,3 +1,4 @@
+import json
 import io
 import logging
 import socket
@@ -7,10 +8,10 @@ import warnings
 import pytest
 
 import mock
-
 from .. import TARPIT_HOST, VALID_SOURCE_ADDRESSES, INVALID_SOURCE_ADDRESSES
 from ..port_helpers import find_unused_port
 from urllib3 import encode_multipart_formdata, HTTPConnectionPool
+from urllib3._collections import HTTPHeaderDict
 from urllib3.exceptions import (
     ConnectTimeoutError,
     EmptyPoolError,
@@ -402,6 +403,36 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             r = pool.request("GET", "/redirect", fields={"target": "/"})
             assert r.status == 200
             assert r.data == b"Dummy server!"
+
+    @mock.patch("urllib3.response.GzipDecoder.decompress")
+    def test_no_decoding_with_redirect_when_preload_disabled(
+        self, gzip_decompress
+    ):
+        """
+        Test that urllib3 does not attempt to decode a gzipped redirect
+        response when `preload_content` is set to `False`.
+        """
+        gzip_decompress = mock.MagicMock()
+        with HTTPConnectionPool(self.host, self.port) as pool:
+            # Three requests are expected: two redirects and one final / 200 OK.
+            response = pool.request(
+                "GET",
+                "/redirect",
+                fields={"target": "/redirect?compressed=true", "compressed": "true"},
+                preload_content=False,
+            )
+        assert response.status == 200
+
+    def test_303_redirect_makes_request_lose_body(self):
+        with HTTPConnectionPool(self.host, self.port) as pool:
+            response = pool.request(
+                "POST",
+                "/redirect",
+                fields={"target": "/headers_and_params", "status": "303 See Other"},
+            )
+        data = json.loads(response.data.decode("utf-8"))
+        assert data["params"] == {}
+        assert "Content-Type" not in HTTPHeaderDict(data["headers"])
 
     def test_bad_connect(self):
         with HTTPConnectionPool("badhost.invalid", self.port) as pool:

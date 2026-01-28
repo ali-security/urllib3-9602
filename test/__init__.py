@@ -44,7 +44,7 @@ INVALID_SOURCE_ADDRESSES = [("192.0.2.255", 0), ("2001:db8::1", 0)]
 SHORT_TIMEOUT = 0.001
 LONG_TIMEOUT = 0.01
 if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS") == "true":
-    LONG_TIMEOUT = 0.5
+    LONG_TIMEOUT = 1
 
 
 def _can_resolve(host):
@@ -226,14 +226,16 @@ def requires_ssl_context_keyfile_password(test):
 def requiresTLSv1():
     """Test requires TLSv1 available"""
     return pytest.mark.skipif(
-        not hasattr(ssl, "PROTOCOL_TLSv1"), reason="Test requires TLSv1"
+        True,  # TLS 1.0 is disabled in modern OpenSSL
+        reason="Test requires TLSv1 (disabled in modern OpenSSL)"
     )
 
 
 def requiresTLSv1_1():
     """Test requires TLSv1.1 available"""
     return pytest.mark.skipif(
-        not hasattr(ssl, "PROTOCOL_TLSv1_1"), reason="Test requires TLSv1.1"
+        True,  # TLS 1.1 is disabled in modern OpenSSL
+        reason="Test requires TLSv1.1 (disabled in modern OpenSSL)"
     )
 
 

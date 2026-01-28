@@ -180,11 +180,22 @@ class TestingApp(RequestHandler):
         "Perform a redirect to ``target``"
         target = request.params.get("target", "/")
         status = request.params.get("status", "303 See Other")
+        compressed = request.params.get("compressed") == "true"
         if len(status) == 3:
             status = "%s Redirect" % status.decode("latin-1")
+        elif isinstance(status, bytes):
+            status = status.decode("latin-1")
 
         headers = [("Location", target)]
-        return Response(status=status, headers=headers)
+        if compressed:
+            headers.append(("Content-Encoding", "gzip"))
+            buf = BytesIO()
+            with gzip.GzipFile(fileobj=buf, mode="wb") as gzfile:
+                gzfile.write(b"foo")
+            body = buf.getvalue()
+        else:
+            body = b""
+        return Response(status=status, headers=headers, body=body)
 
     def not_found(self, request):
         return Response("Not found", status="404 Not Found")
@@ -259,6 +270,11 @@ class TestingApp(RequestHandler):
 
     def headers(self, request):
         return Response(json.dumps(dict(request.headers)))
+
+    def headers_and_params(self, request):
+        return Response(
+            json.dumps({"headers": dict(request.headers), "params": request.params})
+        )
 
     def successful_retry(self, request):
         """Handler which will return an error and then success

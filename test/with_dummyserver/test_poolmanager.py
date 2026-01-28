@@ -4,6 +4,7 @@ import pytest
 
 from dummyserver.server import HAS_IPV6
 from dummyserver.testcase import HTTPDummyServerTestCase, IPv6HTTPDummyServerTestCase
+from urllib3._collections import HTTPHeaderDict
 from urllib3.poolmanager import PoolManager
 from urllib3.connectionpool import port_by_scheme
 from urllib3.exceptions import MaxRetryError
@@ -63,6 +64,85 @@ class TestPoolManager(HTTPDummyServerTestCase):
 
             assert r.status == 200
             assert r.data == b"Dummy server!"
+
+    @pytest.mark.parametrize(
+        "retries",
+        (0, Retry(total=0), Retry(redirect=0), Retry(total=0, redirect=0)),
+    )
+    def test_redirects_disabled_for_pool_manager_with_0(self, retries):
+        """
+        Check handling redirects when retries is set to 0 on the pool
+        manager.
+        """
+        with PoolManager(retries=retries) as http:
+            with pytest.raises(MaxRetryError):
+                http.request("GET", "%s/redirect" % self.base_url)
+
+            # Setting redirect=True should not change the behavior.
+            with pytest.raises(MaxRetryError):
+                http.request("GET", "%s/redirect" % self.base_url, redirect=True)
+
+            # Setting redirect=False should not make it follow the redirect,
+            # but MaxRetryError should not be raised.
+            response = http.request("GET", "%s/redirect" % self.base_url, redirect=False)
+            assert response.status == 303
+
+    @pytest.mark.parametrize(
+        "retries",
+        (
+            False,
+            Retry(total=False),
+            Retry(redirect=False),
+            Retry(total=False, redirect=False),
+        ),
+    )
+    def test_redirects_disabled_for_pool_manager_with_false(self, retries):
+        """
+        Check that setting retries set to False on the pool manager disables
+        raising MaxRetryError and redirect=True does not change the
+        behavior.
+        """
+        with PoolManager(retries=retries) as http:
+            response = http.request("GET", "%s/redirect" % self.base_url)
+            assert response.status == 303
+
+            response = http.request("GET", "%s/redirect" % self.base_url, redirect=True)
+            assert response.status == 303
+
+            response = http.request("GET", "%s/redirect" % self.base_url, redirect=False)
+            assert response.status == 303
+
+    def test_redirects_disabled_for_individual_request(self):
+        """
+        Check handling redirects when they are meant to be disabled
+        on the request level.
+        """
+        with PoolManager() as http:
+            # Check when redirect is not passed.
+            with pytest.raises(MaxRetryError):
+                http.request("GET", "%s/redirect" % self.base_url, retries=0)
+            response = http.request("GET", "%s/redirect" % self.base_url, retries=False)
+            assert response.status == 303
+
+            # Check when redirect=True.
+            with pytest.raises(MaxRetryError):
+                http.request(
+                    "GET", "%s/redirect" % self.base_url, retries=0, redirect=True
+                )
+            response = http.request(
+                "GET", "%s/redirect" % self.base_url, retries=False, redirect=True
+            )
+            assert response.status == 303
+
+            # Check when redirect=False.
+            response = http.request(
+                "GET", "%s/redirect" % self.base_url, retries=0, redirect=False
+            )
+            assert response.status == 303
+            response = http.request(
+                "GET", "%s/redirect" % self.base_url, retries=False, redirect=False
+            )
+            assert response.status == 303
 
     def test_redirect_to_relative_url(self):
         with PoolManager() as http:
@@ -136,13 +216,31 @@ class TestPoolManager(HTTPDummyServerTestCase):
             pool = http.connection_from_host(self.host, self.port)
             assert pool.num_connections == 1
 
+        # Check when retries are configured for the pool manager.
+        with PoolManager(retries=1) as http:
+            with pytest.raises(MaxRetryError):
+                http.request(
+                    "GET",
+                    "%s/redirect" % self.base_url,
+                    fields={"target": "%s/redirect?target=%s/" % (self.base_url, self.base_url)},
+                )
+
+            # Here we allow more retries for the request.
+            response = http.request(
+                "GET",
+                "%s/redirect" % self.base_url,
+                fields={"target": "%s/redirect?target=%s/" % (self.base_url, self.base_url)},
+                retries=2,
+            )
+            assert response.status == 200
+
     def test_redirect_cross_host_remove_headers(self):
         with PoolManager() as http:
             r = http.request(
                 "GET",
                 "%s/redirect" % self.base_url,
                 fields={"target": "%s/headers" % self.base_url_alt},
-                headers={"Authorization": "foo"},
+                headers={"Authorization": "foo", "Cookie": "foo=bar", "Proxy-Authorization": "bar"},
             )
 
             assert r.status == 200
@@ -150,12 +248,14 @@ class TestPoolManager(HTTPDummyServerTestCase):
             data = json.loads(r.data.decode("utf-8"))
 
             assert "Authorization" not in data
+            assert "Proxy-Authorization" not in data
+            assert "Cookie" not in data
 
             r = http.request(
                 "GET",
                 "%s/redirect" % self.base_url,
                 fields={"target": "%s/headers" % self.base_url_alt},
-                headers={"authorization": "foo"},
+                headers={"authorization": "foo", "cookie": "foo=bar", "Proxy-Authorization": "bar"},
             )
 
             assert r.status == 200
@@ -164,6 +264,10 @@ class TestPoolManager(HTTPDummyServerTestCase):
 
             assert "authorization" not in data
             assert "Authorization" not in data
+            assert "cookie" not in data
+            assert "Cookie" not in data
+            assert "Proxy-Authorization" not in data
+            assert "proxy-authorization" not in data
 
     def test_redirect_cross_host_no_remove_headers(self):
         with PoolManager() as http:
@@ -171,7 +275,7 @@ class TestPoolManager(HTTPDummyServerTestCase):
                 "GET",
                 "%s/redirect" % self.base_url,
                 fields={"target": "%s/headers" % self.base_url_alt},
-                headers={"Authorization": "foo"},
+                headers={"Authorization": "foo", "Cookie": "foo=bar", "Proxy-Authorization": "bar"},
                 retries=Retry(remove_headers_on_redirect=[]),
             )
 
@@ -180,6 +284,8 @@ class TestPoolManager(HTTPDummyServerTestCase):
             data = json.loads(r.data.decode("utf-8"))
 
             assert data["Authorization"] == "foo"
+            assert data["Cookie"] == "foo=bar"
+            assert data["Proxy-Authorization"] == "bar"
 
     def test_redirect_cross_host_set_removed_headers(self):
         with PoolManager() as http:
@@ -187,7 +293,12 @@ class TestPoolManager(HTTPDummyServerTestCase):
                 "GET",
                 "%s/redirect" % self.base_url,
                 fields={"target": "%s/headers" % self.base_url_alt},
-                headers={"X-API-Secret": "foo", "Authorization": "bar"},
+                headers={
+                    "X-API-Secret": "foo",
+                    "Authorization": "bar",
+                    "Cookie": "foo=bar",
+                    "Proxy-Authorization": "bar",
+                },
                 retries=Retry(remove_headers_on_redirect=["X-API-Secret"]),
             )
 
@@ -197,12 +308,19 @@ class TestPoolManager(HTTPDummyServerTestCase):
 
             assert "X-API-Secret" not in data
             assert data["Authorization"] == "bar"
+            assert data["Cookie"] == "foo=bar"
+            assert data["Proxy-Authorization"] == "bar"
 
             r = http.request(
                 "GET",
                 "%s/redirect" % self.base_url,
                 fields={"target": "%s/headers" % self.base_url_alt},
-                headers={"x-api-secret": "foo", "authorization": "bar"},
+                headers={
+                    "x-api-secret": "foo",
+                    "authorization": "bar",
+                    "cookie": "foo=bar",
+                    "proxy-authorization": "bar",
+                },
                 retries=Retry(remove_headers_on_redirect=["X-API-Secret"]),
             )
 
@@ -213,6 +331,8 @@ class TestPoolManager(HTTPDummyServerTestCase):
             assert "x-api-secret" not in data
             assert "X-API-Secret" not in data
             assert data["Authorization"] == "bar"
+            assert data["Cookie"] == "foo=bar"
+            assert data["Proxy-Authorization"] == "bar"
 
     def test_redirect_without_preload_releases_connection(self):
         with PoolManager(block=True, maxsize=2) as http:
@@ -222,6 +342,21 @@ class TestPoolManager(HTTPDummyServerTestCase):
             assert r._pool.num_requests == 2
             assert r._pool.num_connections == 1
             assert len(http.pools) == 1
+
+    def test_303_redirect_makes_request_lose_body(self):
+        with PoolManager() as http:
+            response = http.request(
+                "POST",
+                "%s/redirect" % self.base_url,
+                fields={
+                    "target": "%s/headers_and_params" % self.base_url,
+                    "status": "303 See Other",
+                },
+            )
+        data = json.loads(response.data.decode("utf-8"))
+        assert data["params"] == {}
+        assert "Content-Type" not in HTTPHeaderDict(data["headers"])
+
 
     def test_raise_on_redirect(self):
         with PoolManager() as http:
