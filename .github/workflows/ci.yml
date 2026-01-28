@@ -26,7 +26,7 @@ jobs:
           python3.7 setup.py sdist bdist_wheel;
           rstcheck README.rst CHANGES.rst
           python3.7 -m twine check dist/*
-      - uses: "actions/upload-artifact@v4"
+      - uses: actions/upload-artifact@v4
         with:
           name: artifacts
           path: ./dist/*
@@ -34,20 +34,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["2.7", "3.5","3.6", "3.7", "3.8", "3.9"]
+        python-version: ['2.7', '3.5', '3.6', '3.7', '3.8', '3.9']
         os: [macos-15, windows-2022, ubuntu-22.04]
         experimental: [false]
-        nox-session: [""]
+        nox-session: ['']
         exclude:
-          - python-version: "3.7"
+          - python-version: '3.7'
             os: macos-15
-          - python-version: "3.6"
+          - python-version: '3.6'
             os: macos-15
-          - python-version: "3.5"
+          - python-version: '3.5'
             os: macos-15
-          - python-version: "2.7"
+          - python-version: '2.7'
             os: macos-15
-          - python-version: "2.7"
+          - python-version: '2.7'
             os: windows-2022
 
     runs-on: ${{ matrix.os }}
